@@ -1,0 +1,284 @@
+!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Service Status Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .spinner {
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 2px solid #fff;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .pulse {
+            animation: pulse-animation 2s infinite;
+        }
+        @keyframes pulse-animation {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white antialiased">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-white">Live Service Status Monitor</h1>
+            <p class="text-gray-400 mt-2">Automatically checks critical service statuses every 5 minutes.</p>
+            <div class="mt-4">
+                <button id="manual-scan-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition duration-300 flex items-center justify-center mx-auto">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 20h5v-5M20 4h-5v5" />
+                    </svg>
+                    Run Manual Scan
+                </button>
+            </div>
+             <p class="text-xs text-gray-500 mt-2">Last checked: <span id="last-checked-time">Never</span></p>
+        </header>
+
+        <!-- Overall Status -->
+        <div id="overall-status" class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 text-center">
+            <!-- Content will be dynamically inserted here -->
+        </div>
+
+        <!-- Service status grid -->
+        <div id="services-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Service cards will be injected here -->
+        </div>
+
+        <!-- Recent Issues Log -->
+        <div class="mt-12">
+            <h2 class="text-2xl font-semibold mb-4 text-center">Recent Issues (Last 24 Hours)</h2>
+            <div id="issues-log" class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                 <p class="text-gray-400 text-center">No issues detected in the last 24 hours.</p>
+                 <!-- Issues will be logged here -->
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const services = [
+            { name: "Google Cloud", url: "https://status.cloud.com/" },
+            { name: "XBE", url: "https://status.x-b-e.com/" },
+            { name: "Fleetio", url: "https://status.fleetio.com/" },
+            { name: "Meraki", url: "https://status.meraki.net/" },
+            { name: "8x8", url: "https://status.8x8.com/" },
+            { name: "Google Workspace", url: "https://www.google.com/appsstatus/dashboard/" },
+            { name: "Ivanti Cloud", url: "https://status.ivanticloud.com/" },
+            { name: "Okta", url: "https://status.okta.com/" },
+            { name: "SentinelOne", url: "https://status.sentinelone.com/" },
+            { name: "Rapid7", url: "https://rootly.com/external-status-pages/rapid7" },
+            { name: "PrinterLogic", url: "https://rootly.com/external-status-pages/printerlogic" },
+            { name: "Grammarly", url: "https://status.grammarly.com/" },
+            { name: "Envoy", url: "https://status.envoy.com/" },
+            { name: "Avigilon", url: "https://status.avigilon.com/" },
+            { name: "KnowBe4", url: "https://status.knowbe4.com/" },
+            { name: "Oracle Cloud", url: "https://ocistatus.oraclecloud.com/" }
+        ];
+
+        // In-memory store for status history
+        let statusHistory = {};
+
+        const servicesGrid = document.getElementById('services-grid');
+        const overallStatusEl = document.getElementById('overall-status');
+        const issuesLogEl = document.getElementById('issues-log');
+        const lastCheckedTimeEl = document.getElementById('last-checked-time');
+        const manualScanBtn = document.getElementById('manual-scan-btn');
+
+        /**
+         * Fetches the status of a single service.
+         * @param {object} service - The service object with name and url.
+         * @returns {Promise<string>} The status of the service ('Up', 'Down', 'Error').
+         */
+        async function checkServiceStatus(service) {
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(service.url)}`;
+            try {
+                const response = await fetch(proxyUrl, { method: 'GET', cache: 'no-cache' });
+                return response.ok ? 'Up' : 'Down';
+            } catch (error) {
+                console.error(`Error checking ${service.name}:`, error);
+                return 'Error';
+            }
+        }
+
+        /**
+         * Main function to run all checks and update the UI.
+         */
+        async function runAllChecks() {
+            console.log("Running all status checks...");
+            manualScanBtn.disabled = true;
+            manualScanBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            const checkPromises = services.map(async (service) => {
+                const status = await checkServiceStatus(service);
+                
+                // Initialize history if it doesn't exist
+                if (!statusHistory[service.name]) {
+                    statusHistory[service.name] = [];
+                }
+
+                // Add new status to history
+                statusHistory[service.name].push({ status, timestamp: new Date() });
+
+                return { ...service, status };
+            });
+
+            const results = await Promise.all(checkPromises);
+            renderUI(results);
+
+            lastCheckedTimeEl.textContent = new Date().toLocaleString();
+            manualScanBtn.disabled = false;
+            manualScanBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+        
+        /**
+         * Renders the entire UI based on the latest check results.
+         * @param {Array<object>} results - Array of service objects with their status.
+         */
+        function renderUI(results) {
+            renderServiceCards(results);
+            renderOverallStatus(results);
+            renderIssuesLog();
+        }
+
+        /**
+         * Renders the individual service status cards.
+         */
+        function renderServiceCards(results) {
+            servicesGrid.innerHTML = '';
+            results.forEach(service => {
+                const card = document.createElement('div');
+                card.className = 'bg-gray-800 p-5 rounded-lg shadow-md flex justify-between items-center';
+                
+                const statusInfo = getStatusInfo(service.status);
+
+                card.innerHTML = `
+                    <div>
+                        <h3 class="text-lg font-bold text-white">${service.name}</h3>
+                        <a href="${service.url}" target="_blank" rel="noopener noreferrer" class="text-sm text-blue-400 hover:text-blue-300 break-all">${new URL(service.url).hostname}</a>
+                    </div>
+                    <div class="flex items-center space-x-2 flex-shrink-0">
+                        ${statusInfo.indicator}
+                        <span class="font-semibold ${statusInfo.textColor}">${service.status}</span>
+                    </div>
+                `;
+                servicesGrid.appendChild(card);
+            });
+        }
+
+        /**
+         * Renders the overall status banner.
+         */
+        function renderOverallStatus(results) {
+            const downServices = results.filter(s => s.status === 'Down' || s.status === 'Error');
+
+            if (downServices.length === 0) {
+                overallStatusEl.innerHTML = `
+                    <h2 class="text-2xl font-bold text-green-400">All Systems Operational</h2>
+                    <p class="text-gray-300 mt-1">All monitored services are currently running smoothly.</p>
+                `;
+            } else {
+                overallStatusEl.innerHTML = `
+                    <h2 class="text-2xl font-bold text-red-500">Service Disruption Detected</h2>
+                    <p class="text-gray-300 mt-1">${downServices.length} service(s) are currently experiencing issues.</p>
+                `;
+            }
+        }
+
+        /**
+         * Renders the log of issues from the last 24 hours.
+         */
+        function renderIssuesLog() {
+            issuesLogEl.innerHTML = '';
+            const twentyFourHoursAgo = new Date().getTime() - (24 * 60 * 60 * 1000);
+            let issuesFound = false;
+
+            const allIssues = [];
+
+            for (const serviceName in statusHistory) {
+                const history = statusHistory[serviceName];
+                history.forEach(entry => {
+                    if ((entry.status === 'Down' || entry.status === 'Error') && entry.timestamp.getTime() > twentyFourHoursAgo) {
+                        allIssues.push({ serviceName, ...entry });
+                        issuesFound = true;
+                    }
+                });
+            }
+
+            if (!issuesFound) {
+                issuesLogEl.innerHTML = '<p class="text-gray-400 text-center">No issues detected in the last 24 hours.</p>';
+                return;
+            }
+            
+            // Sort issues by most recent first
+            allIssues.sort((a, b) => b.timestamp - a.timestamp);
+
+            const logList = document.createElement('ul');
+            logList.className = 'space-y-3';
+            
+            allIssues.forEach(issue => {
+                const listItem = document.createElement('li');
+                listItem.className = 'flex items-center justify-between text-sm';
+                listItem.innerHTML = `
+                    <div>
+                        <span class="font-bold ${issue.status === 'Down' ? 'text-red-400' : 'text-yellow-400'}">[${issue.status.toUpperCase()}]</span>
+                        <span class="ml-2 text-white">${issue.serviceName}</span>
+                    </div>
+                    <span class="text-gray-400 font-mono">${issue.timestamp.toLocaleTimeString()}</span>
+                `;
+                logList.appendChild(listItem);
+            });
+            issuesLogEl.appendChild(logList);
+        }
+
+        /**
+         * Gets UI elements based on status.
+         * @param {string} status - The status string.
+         * @returns {object} textColor and indicator HTML.
+         */
+        function getStatusInfo(status) {
+            switch (status) {
+                case 'Up':
+                    return { textColor: 'text-green-400', indicator: '<div class="h-4 w-4 bg-green-500 rounded-full shadow-md"></div>' };
+                case 'Down':
+                    return { textColor: 'text-red-400', indicator: '<div class="h-4 w-4 bg-red-500 rounded-full shadow-md pulse"></div>' };
+                case 'Error':
+                    return { textColor: 'text-yellow-400', indicator: '<div class="h-4 w-4 bg-yellow-500 rounded-full shadow-md"></div>' };
+                default:
+                    return { textColor: 'text-gray-400', indicator: '<div class="spinner"></div>' };
+            }
+        }
+
+        // --- Event Listeners and Timers ---
+        manualScanBtn.addEventListener('click', runAllChecks);
+
+        // Initial run on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initial render with placeholders
+            const initialServices = services.map(s => ({...s, status: 'Checking'}));
+            renderUI(initialServices);
+            runAllChecks();
+        });
+
+        // Set up auto-refresh every 5 minutes (300,000 milliseconds)
+        setInterval(runAllChecks, 300000);
+
+    </script>
+</body>
+</html>
